@@ -166,7 +166,7 @@ public:
     // Stolen some code from the resampler; it'd be nice to have these exposed as methods? :)
     const double mUpRatio = sampleRate / GetEncapsulatedSampleRate();
     const auto maxEncapsulatedBlockSize = static_cast<int>(std::ceil(static_cast<double>(maxBlockSize) / mUpRatio));
-    mEncapsulated->ResetAndPrewarm(sampleRate, maxEncapsulatedBlockSize);
+    mEncapsulated->Reset(sampleRate, maxEncapsulatedBlockSize);
   };
 
   // So that we can let the world know if we're resampling (useful for debugging)

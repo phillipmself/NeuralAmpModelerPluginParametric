@@ -462,13 +462,29 @@
 		AAB7E0182CC4B8C6000B8B6E /* container.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AAB7E0102CC4B8C6000B8B6E /* container.cpp */; };
 		AAB7E0192CC4B8C6000B8B6E /* container.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AAB7E0102CC4B8C6000B8B6E /* container.cpp */; };
 		B1D2F7012D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		4368D00D9318A761ED52364F /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		56D0196CB2E4B631A9B4428A /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7032D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		0CCB8BCBCE1A763A8A14909F /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		F5BBC6BB88B533C0B54AD864 /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7042D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		572E7DAFAAE536C9BA3CAC54 /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		D0B4A5246503475F7886AC69 /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7052D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		5BDD9D6FF56080D890316B9A /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		206AD18628A3A89D4675315E /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7062D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		1CF0E4DC4E2396211A7A2CAC /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		850BE394495EF021F19AAFC9 /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7072D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		F28120A6342F78C1E7510886 /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		4206869DEA016D73183B89CB /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7082D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		9034EA59D25DFF594A8725C2 /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		CD1E294075BD6E29AF234FB6 /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B1D2F7092D0000020027AB66 /* wavenet/slimmable.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */; };
+		517A7C5BCCBE1DFE5EB16D17 /* wavenet/parametric.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */; };
+		D05637E6A6D1A4950470929C /* wavenet/parametric_adapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */; };
 		B885CBC52304AE7300D73128 /* IPlugProcessor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 4F8F61A8202807B9003F2573 /* IPlugProcessor.cpp */; };
 		B8E22A0C220268C4007CBF4C /* IPlugVST3_ProcessorBase.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B8E22A0A220268C4007CBF4C /* IPlugVST3_ProcessorBase.cpp */; };
 		B8E22A0D220268C4007CBF4C /* IPlugVST3_ProcessorBase.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B8E22A0A220268C4007CBF4C /* IPlugVST3_ProcessorBase.cpp */; };
@@ -1041,6 +1057,8 @@
 		AAB7BBB62CC4B8C6000B8B6E /* get_dsp.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = get_dsp.h; sourceTree = "<group>"; };
 		AAB7E0102CC4B8C6000B8B6E /* container.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = container.cpp; sourceTree = "<group>"; };
 		B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = wavenet/slimmable.cpp; sourceTree = "<group>"; };
+		CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = wavenet/parametric.cpp; sourceTree = "<group>"; };
+		7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = wavenet/parametric_adapter.cpp; sourceTree = "<group>"; };
 		B8E22A0A220268C4007CBF4C /* IPlugVST3_ProcessorBase.cpp */ = {isa = PBXFileReference; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = IPlugVST3_ProcessorBase.cpp; path = ../../iPlug2/IPlug/VST3/IPlugVST3_ProcessorBase.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		B8E22A0B220268C4007CBF4C /* IPlugVST3_ProcessorBase.h */ = {isa = PBXFileReference; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = IPlugVST3_ProcessorBase.h; path = ../../iPlug2/IPlug/VST3/IPlugVST3_ProcessorBase.h; sourceTree = "<group>"; tabWidth = 2; };
 		B8EA6B932203868500D23A86 /* IPlugVST3_Common.h */ = {isa = PBXFileReference; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = IPlugVST3_Common.h; path = ../../iPlug2/IPlug/VST3/IPlugVST3_Common.h; sourceTree = "<group>"; tabWidth = 2; };
@@ -1313,6 +1331,8 @@
 				C2A2FAE012D0000110027AB66 /* wavenet/a2_fast.cpp */,
 				C2A2FAE022D0000110027AB66 /* wavenet/a2_fast.h */,
 				B1D2F7002D0000010027AB66 /* wavenet/slimmable.cpp */,
+				CA6874733CA24BFB19F03B6A /* wavenet/parametric.cpp */,
+				7902972DC699E9F7464FDE0C /* wavenet/parametric_adapter.cpp */,
 				4F2FB14C2A0047420027AB66 /* wavenet/model.h */,
 				4F2FB15A2A0047420027AB68 /* film.h */,
 				4F2FB15B2A0047420027AB68 /* gating_activations.h */,
@@ -2572,6 +2592,8 @@
 				4F2FB1842A0047430027AB66 /* wav.cpp in Sources */,
 				4F2FB1C12A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7072D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				F28120A6342F78C1E7510886 /* wavenet/parametric.cpp in Sources */,
+				4206869DEA016D73183B89CB /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE112D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0122CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1CF2A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2612,6 +2634,8 @@
 				4F993F7423055C96000313AF /* IPlugProcessor.cpp in Sources */,
 				4F2FB1BE2A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7042D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				572E7DAFAAE536C9BA3CAC54 /* wavenet/parametric.cpp in Sources */,
+				D0B4A5246503475F7886AC69 /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE122D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0132CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D02A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2655,6 +2679,8 @@
 				4F2FB1992A0047430027AB66 /* dsp.cpp in Sources */,
 				4F2FB1C32A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7092D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				517A7C5BCCBE1DFE5EB16D17 /* wavenet/parametric.cpp in Sources */,
+				D05637E6A6D1A4950470929C /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE132D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0142CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D12A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2724,6 +2750,8 @@
 				4F78BE2522E7406D00AD537E /* IPlugPluginBase.cpp in Sources */,
 				4F2FB1C22A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7082D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				9034EA59D25DFF594A8725C2 /* wavenet/parametric.cpp in Sources */,
+				CD1E294075BD6E29AF234FB6 /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE142D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0152CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D22A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2761,6 +2789,8 @@
 				4F2FB1622A0047430027AB66 /* dsp.cpp in Sources */,
 				4F2FB1BD2A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7032D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				0CCB8BCBCE1A763A8A14909F /* wavenet/parametric.cpp in Sources */,
+				F5BBC6BB88B533C0B54AD864 /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE152D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0162CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D32A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2844,6 +2874,8 @@
 				4FB600231567CB0A0020189A /* IPlugParameter.cpp in Sources */,
 				4F2FB1BF2A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7052D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				5BDD9D6FF56080D890316B9A /* wavenet/parametric.cpp in Sources */,
+				206AD18628A3A89D4675315E /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE162D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0172CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D42A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2903,6 +2935,8 @@
 				4F2FB1912A0047430027AB66 /* dsp.cpp in Sources */,
 				4F2FB1BB2A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7012D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				4368D00D9318A761ED52364F /* wavenet/parametric.cpp in Sources */,
+				56D0196CB2E4B631A9B4428A /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE172D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0182CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D52A0047430027AB66 /* conv1d.cpp in Sources */,
@@ -2981,6 +3015,8 @@
 				4F2FB1AB2A0047430027AB66 /* lstm.cpp in Sources */,
 				4F2FB1C02A0047430027AB66 /* wavenet/model.cpp in Sources */,
 				B1D2F7062D0000020027AB66 /* wavenet/slimmable.cpp in Sources */,
+				1CF0E4DC4E2396211A7A2CAC /* wavenet/parametric.cpp in Sources */,
+				850BE394495EF021F19AAFC9 /* wavenet/parametric_adapter.cpp in Sources */,
 				C2A2FAE182D0000120027AB66 /* wavenet/a2_fast.cpp in Sources */,
 				AAB7E0192CC4B8C6000B8B6E /* container.cpp in Sources */,
 				4F2FB1D62A0047430027AB66 /* conv1d.cpp in Sources */,
