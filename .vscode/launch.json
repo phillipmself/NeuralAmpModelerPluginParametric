@@ -29,7 +29,7 @@
             "name": "(lldb) Launch APP",
             "type": "lldb",
             "request": "launch",
-            "program": "~/Applications/NeuralAmpModeler.app",
+            "program": "${env:HOME}/Applications/NeuralAmpModeler.app",
             "preLaunchTask": "build APP Debug"
         }
     ]
