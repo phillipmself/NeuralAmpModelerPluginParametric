@@ -9,4 +9,5 @@
 	url = https://github.com/sdatkinson/AudioDSPTools.git
 [submodule "NeuralAmpModelerCore"]
 	path = NeuralAmpModelerCore
-	url = https://github.com/sdatkinson/NeuralAmpModelerCore.git
+	url = https://github.com/phillipmself/NeuralAmpModelerCoreParametric.git
+	branch = feature/nam-a2-parametric
