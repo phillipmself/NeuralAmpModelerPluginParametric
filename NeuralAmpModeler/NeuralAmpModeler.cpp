@@ -180,11 +180,13 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
 
     // Misc Areas
     const auto settingsButtonArea = CornerButtonArea(b);
-    const auto parametricButtonArea = settingsButtonArea.GetTranslated(-74.f, 0.f).GetCentredInside(60.f, 24.f);
+    const auto parametricButtonArea =
+      IRECT(trebleKnobArea.L + 6.f, eqToggleArea.T, outputKnobArea.R - 6.f, eqToggleArea.B)
+        .GetCentredInside(96.f, 28.f);
     const auto parametricButtonStyle =
       style
         .WithShowValue(false)
-        .WithLabelText(IText(DEFAULT_TEXT_SIZE - 1.f, COLOR_WHITE, "Roboto-Regular", EAlign::Center, EVAlign::Middle))
+        .WithLabelText(style.labelText.WithAlign(EAlign::Center).WithVAlign(EVAlign::Middle))
         .WithDrawShadows(false)
         .WithRoundness(0.25f)
         .WithFrameThickness(1.0f);
@@ -299,11 +301,10 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
       },
       gearSVG));
 
-    pGraphics
-      ->AttachControl(new NAMSettingsPageControl(b, backgroundBitmap, inputLevelBackgroundBitmap, switchHandleBitmap,
-                                                 crossSVG, style, radioButtonStyle),
-                      kCtrlTagSettingsBox)
-      ->Hide(true);
+    auto* settingsPage = new NAMSettingsPageControl(b, backgroundBitmap, inputLevelBackgroundBitmap, switchHandleBitmap,
+                                                    crossSVG, style, radioButtonStyle);
+    settingsPage->SetVisibilityChangedCallback([this](bool /*isVisible*/) { _SyncParametricUIFromModel(); });
+    pGraphics->AttachControl(settingsPage, kCtrlTagSettingsBox)->Hide(true);
 
     // Parametric overlay: button visibility is driven by _SyncParametricUIFromModel().
     pGraphics
@@ -314,7 +315,8 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
       ->Hide(true);
 
     pGraphics
-      ->AttachControl(new NAMParametricPageControl(b, backgroundBitmap, crossSVG, style), kCtrlTagParametricBox)
+      ->AttachControl(new NAMParametricPageControl(b, backgroundBitmap, knobBackgroundBitmap, crossSVG, style),
+                      kCtrlTagParametricBox)
       ->Hide(true);
 
     const auto slimKnobArea = b.GetCentredInside(100.f, NAM_KNOB_HEIGHT + 24.f);
@@ -463,6 +465,11 @@ void NeuralAmpModeler::OnIdle()
         p->Hide(true);
       if (auto* p = pGraphics->GetControlWithTag(kCtrlTagSlimKnob))
         p->Hide(true);
+      if (auto* p = pGraphics->GetControlWithTag(kCtrlTagParametricBox))
+      {
+        if (auto* pParametricPage = p->As<NAMParametricPageControl>())
+          pParametricPage->ClearParametricModel();
+      }
       _SyncParametricUIFromModel();
       pGraphics->SetAllControlsDirty();
       mModelCleared = false;
@@ -865,6 +872,11 @@ void NeuralAmpModeler::_ApplyPendingParametricStateToModel()
   mParametricState.dirty = false;
 }
 
+void NeuralAmpModeler::_PublishParametricValueUpdateFromUI(const std::vector<float>& values)
+{
+  std::atomic_store(&mPublishedParametricValueUpdate, std::make_shared<const std::vector<float>>(values));
+}
+
 std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
 {
   WDL_String previousNAMPath = mNAMPath;
@@ -1095,6 +1107,22 @@ void NeuralAmpModeler::_UpdateControlsFromModel()
       const bool show = mModel->GetSlimmableModel() != nullptr;
       pSlimIcon->Hide(!show);
     }
+    if (auto* pParametricBox = pGraphics->GetControlWithTag(kCtrlTagParametricBox))
+    {
+      if (auto* pParametricPage = pParametricBox->As<NAMParametricPageControl>())
+      {
+        if (mModel->HasParametricControls())
+        {
+          pParametricPage->SetParametricModel(
+            mParametricState.specs, mParametricState.currentValues,
+            [this](const std::vector<float>& values) { _PublishParametricValueUpdateFromUI(values); });
+        }
+        else
+        {
+          pParametricPage->ClearParametricModel();
+        }
+      }
+    }
     _SyncParametricUIFromModel();
   }
 }
@@ -1127,7 +1155,11 @@ void NeuralAmpModeler::_SyncParametricUIFromModel()
 {
   if (auto* pGraphics = GetUI())
   {
-    const bool showParametricButton = mModel != nullptr && mModel->HasParametricControls();
+    bool settingsVisible = false;
+    if (auto* pSettingsBox = pGraphics->GetControlWithTag(kCtrlTagSettingsBox))
+      settingsVisible = !pSettingsBox->IsHidden();
+
+    const bool showParametricButton = mModel != nullptr && mModel->HasParametricControls() && !settingsVisible;
     if (auto* pParametricButton = pGraphics->GetControlWithTag(kCtrlTagParametricButton))
       pParametricButton->Hide(!showParametricButton);
 

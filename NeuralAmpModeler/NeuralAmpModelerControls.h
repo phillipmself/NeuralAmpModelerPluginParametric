@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm> // std::clamp
 #include <cmath> // std::round
 #include <cstdio> // FILE, fclose
+#include <iomanip> // std::setprecision
 #include <sstream> // std::stringstream
 #include <unordered_map> // std::unordered_map
 #include "IControls.h"
@@ -94,6 +96,13 @@ class NAMKnobControl : public IVKnobControl, public IBitmapBase
 public:
   NAMKnobControl(const IRECT& bounds, int paramIdx, const char* label, const IVStyle& style, IBitmap bitmap)
   : IVKnobControl(bounds, paramIdx, label, style, true)
+  , IBitmapBase(bitmap)
+  {
+    mInnerPointerFrac = 0.55;
+  }
+
+  NAMKnobControl(const IRECT& bounds, IActionFunction aF, const char* label, const IVStyle& style, IBitmap bitmap)
+  : IVKnobControl(bounds, aF, label, style, true)
   , IBitmapBase(bitmap)
   {
     mInnerPointerFrac = 0.55;
@@ -682,6 +691,8 @@ public:
 class NAMOverlayPageControlBase : public IContainerBaseWithNamedChildren
 {
 public:
+  using VisibilityChangedCallback = std::function<void(bool isVisible)>;
+
   NAMOverlayPageControlBase(const IRECT& bounds, const IBitmap& bitmap, ISVG closeSVG, int animationTime)
   : IContainerBaseWithNamedChildren(bounds)
   , mBitmap(bitmap)
@@ -702,6 +713,8 @@ public:
     return false;
   }
 
+  void SetVisibilityChangedCallback(VisibilityChangedCallback callback) { mVisibilityChangedCallback = std::move(callback); }
+
   void HideAnimated(bool hide)
   {
     mWillHide = hide;
@@ -709,6 +722,7 @@ public:
     if (hide == false)
     {
       mHide = false;
+      _NotifyVisibilityChanged(true);
     }
     else // hide subcontrols immediately
     {
@@ -728,6 +742,7 @@ public:
         {
           pCaller->OnEndAnimation();
           IContainerBase::Hide(mWillHide);
+          _NotifyVisibilityChanged(!mWillHide);
           GetUI()->SetAllControlsDirty();
           return;
         }
@@ -758,11 +773,18 @@ protected:
     return style.WithDrawFrame(false).WithValueText(IText(DEFAULT_TEXT_SIZE, align, PluginColors::HELP_TEXT));
   }
 
+  void _NotifyVisibilityChanged(bool isVisible)
+  {
+    if (mVisibilityChangedCallback != nullptr)
+      mVisibilityChangedCallback(isVisible);
+  }
+
 private:
   IBitmap mBitmap;
   ISVG mCloseSVG;
   int mAnimationTime = 200;
   bool mWillHide = false;
+  VisibilityChangedCallback mVisibilityChangedCallback;
 
   struct CommonControlNames
   {
@@ -1110,36 +1132,232 @@ private:
 };
 
 // Full-window overlay shell for parametric models, modeled after NAMSettingsPageControl.
-// Intentionally has no per-parameter controls yet; this is the show/hide shell only.
+// Owns a local UI copy of the model's specs/values and publishes immutable snapshots
+// back to the plugin when a control moves.
 class NAMParametricPageControl : public NAMOverlayPageControlBase
 {
 public:
-  NAMParametricPageControl(const IRECT& bounds, const IBitmap& bitmap, ISVG closeSVG, const IVStyle& style)
+  using ValuesChangedCallback = std::function<void(const std::vector<float>&)>;
+
+  NAMParametricPageControl(const IRECT& bounds, const IBitmap& bitmap, const IBitmap& knobBitmap, ISVG closeSVG,
+                           const IVStyle& style)
   : NAMOverlayPageControlBase(bounds, bitmap, closeSVG, 200)
+  , mKnobBitmap(knobBitmap)
   , mStyle(style)
   {
   }
 
+  void SetParametricModel(const std::vector<nam::ParamSpec>& specs, const std::vector<float>& values,
+                          ValuesChangedCallback onValuesChanged)
+  {
+    mSpecs = specs;
+    mValues.resize(mSpecs.size());
+    for (size_t i = 0; i < mSpecs.size(); ++i)
+    {
+      const float seededValue = i < values.size() ? values[i] : mSpecs[i].defaultValue;
+      mValues[i] = std::clamp(seededValue, mSpecs[i].min, mSpecs[i].max);
+    }
+    mOnValuesChanged = std::move(onValuesChanged);
+    _RebuildParameterControls();
+  }
+
+  void ClearParametricModel()
+  {
+    mSpecs.clear();
+    mValues.clear();
+    mOnValuesChanged = nullptr;
+    _RebuildParameterControls();
+  }
+
   void OnAttached() override
   {
-    const auto bodyStyle = MakeOverlayBodyStyle(mStyle);
     AddOverlayChrome("PARAMETRIC CONTROLS");
-
-    const auto placeholderArea = GetRECT().GetMidVPadded(40.0f);
-    AddNamedChildControl(
-      new IVLabelControl(placeholderArea, "Model-specific controls are coming soon.", bodyStyle),
-      mControlNames.placeholder);
-
+    mContentContainer = static_cast<IContainerBase*>(AddNamedChildControl(new IContainerBase(GetContentArea()),
+                                                                          mControlNames.contentContainer));
+    _RebuildParameterControls();
     OnResize();
   }
 
+  void OnResize() override
+  {
+    if (mContentContainer != nullptr)
+      mContentContainer->SetTargetAndDrawRECTs(GetContentArea());
+    _RebuildParameterControls();
+  }
+
 private:
+  class ParametricKnobControl : public NAMKnobControl
+  {
+  public:
+    using RealValueChangedCallback = std::function<void(float)>;
+
+    ParametricKnobControl(const IRECT& bounds, const nam::ParamSpec& spec, const float initialValue,
+                          const IVStyle& style, IBitmap knobBitmap, RealValueChangedCallback onChanged)
+    : NAMKnobControl(bounds, nullptr, spec.name.c_str(), style, knobBitmap)
+    , mSpec(spec)
+    , mOnChanged(std::move(onChanged))
+    {
+      SetRealValue(initialValue, false);
+    }
+
+    void OnInit() override { _SyncValueString(); }
+
+    void SetDirty(bool triggerAction, int valIdx = kNoValIdx) override
+    {
+      _SyncValueString();
+      IControl::SetDirty(false, valIdx);
+      if (mOnChanged != nullptr && triggerAction)
+        mOnChanged(GetRealValue());
+    }
+
+    void OnMouseDblClick(float x, float y, const IMouseMod& mod) override { SetRealValue(mSpec.defaultValue, true); }
+
+    float GetRealValue() const
+    {
+      return static_cast<float>(mSpec.min + (GetValue() * static_cast<double>(mSpec.max - mSpec.min)));
+    }
+
+  private:
+    void SetRealValue(const float value, const bool triggerAction)
+    {
+      const float clamped = std::clamp(value, mSpec.min, mSpec.max);
+      const double denom = static_cast<double>(mSpec.max - mSpec.min);
+      const double normalized = denom == 0.0 ? 0.0 : (static_cast<double>(clamped - mSpec.min) / denom);
+      SetValue(normalized);
+      SetDirty(triggerAction);
+    }
+
+    void _SyncValueString()
+    {
+      mValueStr.Set(FormatValue(GetRealValue()).c_str());
+      if (GetUI() != nullptr)
+        SetTargetRECT(MakeRects(mRECT));
+    }
+
+    static std::string FormatValue(const float value)
+    {
+      std::ostringstream ss;
+      ss << std::fixed << std::setprecision(3) << value;
+      std::string formatted = ss.str();
+      while (!formatted.empty() && formatted.back() == '0')
+        formatted.pop_back();
+      if (!formatted.empty() && formatted.back() == '.')
+        formatted.pop_back();
+      return formatted.empty() ? "0" : formatted;
+    }
+
+    nam::ParamSpec mSpec;
+    RealValueChangedCallback mOnChanged;
+  };
+
+  IRECT GetContentArea() const { return GetRECT().GetPadded(-24.f).GetReducedFromTop(70.f).GetReducedFromBottom(10.f); }
+
+  static int GetNumColumns(const int numControls)
+  {
+    if (numControls <= 1)
+      return 1;
+    if (numControls <= 4)
+      return 2;
+    if (numControls <= 9)
+      return 3;
+    return 4;
+  }
+
+  void _ClearParameterControls()
+  {
+    if (mContentContainer == nullptr)
+      return;
+
+    while (mContentContainer->NChildren() > 0)
+    {
+      IControl* child = mContentContainer->GetChild(mContentContainer->NChildren() - 1);
+      mContentContainer->RemoveChildControl(child);
+    }
+  }
+
+  IControl* _AddContentChildControl(IControl* control)
+  {
+    IControl* added = mContentContainer->AddChildControl(control);
+    added->Hide(IsHidden() || mContentContainer->IsHidden());
+    return added;
+  }
+
+  void _RebuildParameterControls()
+  {
+    if (mContentContainer == nullptr)
+      return;
+
+    _ClearParameterControls();
+
+    if (mSpecs.empty())
+    {
+      const auto bodyStyle = MakeOverlayBodyStyle(mStyle);
+      _AddContentChildControl(
+        new IVLabelControl(mContentContainer->GetRECT().GetMidVPadded(40.0f), "No parametric controls available.",
+                           bodyStyle));
+      return;
+    }
+
+    const int numControls = static_cast<int>(mSpecs.size());
+    const auto knobStyle =
+      mStyle
+        .WithLabelText(IText(DEFAULT_TEXT_SIZE + 3.f, EVAlign::Middle, PluginColors::NAM_THEMEFONTCOLOR))
+        .WithValueText(IText(DEFAULT_TEXT_SIZE + 3.f, EVAlign::Bottom, PluginColors::NAM_THEMEFONTCOLOR));
+    const auto contentArea = mContentContainer->GetRECT().GetPadded(-4.f);
+    const float knobStrideX = ((PLUG_WIDTH - 2.0f * (20.0f + 10.0f + 20.0f)) / static_cast<float>(numKnobs));
+    const float knobExpandPad = 2.0f;
+    const float knobHeight = NAM_KNOB_HEIGHT;
+    const float rowGap = 8.0f;
+    const float mainAreaPad = 20.0f;
+    const float contentPad = 10.0f;
+    const float titleHeight = 50.0f;
+    const float knobsExtraSpaceBelowTitle = 25.0f;
+    const int maxColumns =
+      std::max(1, std::min(numControls, static_cast<int>(std::floor(contentArea.W() / knobStrideX))));
+    const int numColumns = std::min(numControls, maxColumns);
+    const int numRows = (numControls + numColumns - 1) / numColumns;
+    const float firstRowTop = GetRECT().T + mainAreaPad + contentPad + titleHeight + knobsExtraSpaceBelowTitle;
+    const float startY = std::max(contentArea.T, firstRowTop);
+
+    for (int row = 0; row < numRows; ++row)
+    {
+      const int rowStart = row * numColumns;
+      const int rowCount = std::min(numColumns, numControls - rowStart);
+      const float rowWidth = rowCount * knobStrideX;
+      const float rowLeft = contentArea.MW() - 0.5f * rowWidth;
+      const float rowTop = startY + row * (knobHeight + rowGap);
+
+      for (int col = 0; col < rowCount; ++col)
+      {
+        const int i = rowStart + col;
+        const float cellLeft = rowLeft + col * knobStrideX;
+        const IRECT cellArea(cellLeft, rowTop, cellLeft + knobStrideX, rowTop + knobHeight);
+        const auto knobArea = cellArea.GetPadded(knobExpandPad);
+        const nam::ParamSpec spec = mSpecs[static_cast<size_t>(i)];
+
+        _AddContentChildControl(new ParametricKnobControl(
+          knobArea, spec, mValues[static_cast<size_t>(i)], knobStyle, mKnobBitmap, [this, i](const float newValue) {
+            if (static_cast<size_t>(i) >= mValues.size())
+              return;
+            mValues[static_cast<size_t>(i)] = newValue;
+            if (mOnValuesChanged)
+              mOnValuesChanged(mValues);
+          }));
+      }
+    }
+  }
+
+  IBitmap mKnobBitmap;
   IVStyle mStyle;
+  IContainerBase* mContentContainer = nullptr;
+  std::vector<nam::ParamSpec> mSpecs;
+  std::vector<float> mValues;
+  ValuesChangedCallback mOnValuesChanged;
 
   // Names for controls
   // Make sure that these are all unique and that you use them with AddNamedChildControl
   struct ControlNames
   {
-    const std::string placeholder = "Placeholder";
+    const std::string contentContainer = "ContentContainer";
   } mControlNames;
 };

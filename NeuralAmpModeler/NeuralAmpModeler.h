@@ -293,6 +293,10 @@ private:
   // IParametricControl when dirty, then advances currentValues. Must run after
   // _ApplyDSPStaging() promotes the live model and before mModel->process().
   void _ApplyPendingParametricStateToModel();
+  // UI-thread only: publishes an immutable full-vector snapshot for later
+  // audio-thread consumption. This is the only Step 6 write path from the
+  // dynamic parametric overlay back into the live DSP handoff mailbox.
+  void _PublishParametricValueUpdateFromUI(const std::vector<float>& values);
 
   void _SetInputGain();
   void _SetOutputGain();
