@@ -178,6 +178,13 @@ public:
     return dynamic_cast<const nam::SlimmableModel*>(mEncapsulated.get());
   }
 
+  nam::IParametricControl* GetParametricControl() { return dynamic_cast<nam::IParametricControl*>(mEncapsulated.get()); }
+  const nam::IParametricControl* GetParametricControl() const
+  {
+    return dynamic_cast<const nam::IParametricControl*>(mEncapsulated.get());
+  }
+  bool HasParametricControls() const { return GetParametricControl() != nullptr; }
+
 private:
   bool NeedToResample() const { return GetExpectedSampleRate() != GetEncapsulatedSampleRate(); };
   // The encapsulated NAM
