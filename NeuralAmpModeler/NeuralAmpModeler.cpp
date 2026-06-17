@@ -336,6 +336,8 @@ void NeuralAmpModeler::ProcessBlock(iplug::sample** inputs, iplug::sample** outp
   // Input is collapsed to mono in preparation for the NAM.
   _ProcessInput(inputs, numFrames, numChannelsExternalIn, numChannelsInternal);
   _ApplyDSPStaging();
+  _ConsumePublishedParametricValueUpdate();
+  _ApplyPendingParametricStateToModel();
   const bool noiseGateActive = GetParam(kNoiseGateActive)->Value();
   const bool toneStackActive = GetParam(kEQActive)->Value();
 
@@ -601,6 +603,7 @@ void NeuralAmpModeler::_ApplyDSPStaging()
     mNAMPath.Set("");
     mShouldRemoveModel = false;
     mModelCleared = true;
+    std::atomic_store(&mPublishedParametricValueUpdate, std::shared_ptr<const std::vector<float>>{});
     _ClearParametricState();
     _UpdateLatency();
     _SetInputGain();
@@ -617,6 +620,7 @@ void NeuralAmpModeler::_ApplyDSPStaging()
   {
     mModel = std::move(mStagedModel);
     mStagedModel = nullptr;
+    std::atomic_store(&mPublishedParametricValueUpdate, std::shared_ptr<const std::vector<float>>{});
     if (mStagedParametricState != nullptr)
     {
       mParametricState = std::move(*mStagedParametricState);
@@ -778,6 +782,67 @@ NeuralAmpModeler::_CreateParametricStateFromModel(const nam::IParametricControl&
 }
 
 bool NeuralAmpModeler::_HasParametricState() const { return !mParametricState.specs.empty(); }
+
+void NeuralAmpModeler::_ConsumePublishedParametricValueUpdate()
+{
+  std::shared_ptr<const std::vector<float>> published =
+    std::atomic_exchange(&mPublishedParametricValueUpdate, std::shared_ptr<const std::vector<float>>{});
+  if (published == nullptr)
+    return;
+
+  if (!_HasParametricState())
+  {
+    assert(false && "Published parametric value update without live parametric state");
+    return;
+  }
+
+  if (published->size() != mParametricState.pendingValues.size())
+  {
+    assert(false && "Published parametric value update size mismatch");
+    return;
+  }
+
+  std::copy(published->begin(), published->end(), mParametricState.pendingValues.begin());
+  mParametricState.dirty = true;
+}
+
+void NeuralAmpModeler::_ApplyPendingParametricStateToModel()
+{
+  if (!mParametricState.dirty)
+    return;
+
+  if (mModel == nullptr)
+  {
+    assert(false && "Dirty parametric state without a live model");
+    mParametricState.dirty = false;
+    return;
+  }
+
+  nam::IParametricControl* parametric = mModel->GetParametricControl();
+  if (parametric == nullptr)
+  {
+    assert(false && "Dirty parametric state on a non-parametric model");
+    mParametricState.dirty = false;
+    return;
+  }
+
+  const size_t expectedParamDim = static_cast<size_t>(parametric->ParamDim());
+  if (!_HasParametricState() || mParametricState.pendingValues.size() != expectedParamDim
+      || mParametricState.currentValues.size() != expectedParamDim)
+  {
+    assert(false && "Live parametric state shape mismatch");
+    mParametricState.dirty = false;
+    return;
+  }
+
+  // SetParams() throws std::invalid_argument on a size mismatch; specs/pendingValues are
+  // sized together at staging time, but this is the audio thread, so fail safe instead of
+  // letting an exception escape ProcessBlock().
+  parametric->SetParams(mParametricState.pendingValues);
+  std::copy(mParametricState.pendingValues.begin(), mParametricState.pendingValues.end(),
+            mParametricState.currentValues.begin());
+  mParametricState.dirty = false;
+}
 
 std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
 {
