@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+
 #include "../AudioDSPTools/dsp/ImpulseResponse.h"
 #include "../AudioDSPTools/dsp/NoiseGate.h"
 #include "../AudioDSPTools/dsp/dsp.h"
@@ -272,11 +275,33 @@ private:
     // Last values committed to the DSP (or defaults, if never applied).
     std::vector<float> currentValues;
     // Audio-thread-owned values waiting to be committed to the DSP. Non-audio threads
-    // must publish immutable snapshots for later promotion instead of mutating this
-    // vector directly.
+    // must publish immutable full-state snapshots for later promotion instead of
+    // mutating this vector directly.
     std::vector<float> pendingValues;
     // True when pendingValues differs from what's been committed and needs applying.
     bool dirty = false;
+  };
+
+  // Double-buffered, seqlock-style replacement for the old single atomic
+  // shared_ptr<const vector<float>> swap. Both buffers are pre-sized to numValues
+  // up front so neither the UI-thread publish nor the audio-thread consume ever
+  // allocates, and the audio thread never has to touch shared_ptr refcounts in
+  // its steady-state path (see mParametricValueSnapshotMailboxRaw).
+  struct ParametricValueSnapshotMailbox
+  {
+    std::array<std::vector<float>, 2> snapshots;
+    // Index of the buffer holding the most recently published snapshot.
+    std::atomic<size_t> publishedIndex = 0;
+    // Seqlock counter: odd while a publish is in progress, even when stable.
+    // The consumer retries if it observes an odd value or if the value changes
+    // between the start and end of its copy (a torn read).
+    std::atomic<uint64_t> publishedVersion = 0;
+    // Audio thread marks the buffer it is currently copying so the UI thread
+    // does not reuse it for the next publish.
+    std::atomic<int> readingIndex = -1;
+    size_t numValues = 0;
+    // Audio-thread only: remembers the last fully-consumed publishedVersion.
+    uint64_t consumedVersion = 0;
   };
 
   // Parametric model shadow state helpers.
@@ -284,19 +309,23 @@ private:
   void _ClearParametricState();
   // Builds shadow state from the model's ParamSpec defaults, in spec order.
   ParametricModelState _CreateParametricStateFromModel(const nam::IParametricControl& parametric) const;
+  // Allocates and seeds a per-model double-buffer mailbox for full-state snapshot publication.
+  std::shared_ptr<ParametricValueSnapshotMailbox>
+  _CreateParametricValueSnapshotMailbox(const std::vector<float>& initialValues) const;
   // Cheap check for whether promoted plugin-owned parametric shadow state is populated.
   bool _HasParametricState() const;
-  // Audio-thread only: consumes the latest published param update snapshot, if any,
-  // into mParametricState.pendingValues and marks it dirty.
+  // Audio-thread only: consumes the latest published full-state snapshot, if any, into
+  // mParametricState.pendingValues and marks it dirty.
   void _ConsumePublishedParametricValueUpdate();
   // Audio-thread only: commits mParametricState.pendingValues to the live model's
   // IParametricControl when dirty, then advances currentValues. Must run after
   // _ApplyDSPStaging() promotes the live model and before mModel->process().
   void _ApplyPendingParametricStateToModel();
-  // UI-thread only: publishes an immutable full-vector snapshot for later
+  // UI-thread only: publishes an immutable full-state snapshot for later
   // audio-thread consumption. This is the only Step 6 write path from the
   // dynamic parametric overlay back into the live DSP handoff mailbox.
-  void _PublishParametricValueUpdateFromUI(const std::vector<float>& values);
+  void _PublishParametricValueUpdateFromUI(const std::shared_ptr<ParametricValueSnapshotMailbox>& mailbox,
+                                           const std::vector<float>& values);
 
   void _SetInputGain();
   void _SetOutputGain();
@@ -360,10 +389,18 @@ private:
 
   ParametricModelState mParametricState;
   std::unique_ptr<ParametricModelState> mStagedParametricState;
-  // Cross-thread mailbox for future UI/control writes: non-audio threads publish an
-  // immutable snapshot, the audio thread atomically consumes and copies it into the
-  // live pending buffer between blocks.
-  std::shared_ptr<const std::vector<float>> mPublishedParametricValueUpdate;
+  // Cross-thread mailbox for UI/control writes. A new mailbox is allocated and seeded on
+  // model staging/load, then publishes whole snapshots through two pre-sized buffers.
+  // The UI thread's lambda capture (see _UpdateControlsFromModel) holds its own copy of
+  // this shared_ptr, taken only after observing mNewModelLoadedInDSP go true; that
+  // (already-existing) flag is what makes the plain, non-atomic read of this member safe
+  // from the UI thread, since the audio thread always writes it before setting the flag.
+  std::shared_ptr<ParametricValueSnapshotMailbox> mParametricValueSnapshotMailbox;
+  std::shared_ptr<ParametricValueSnapshotMailbox> mStagedParametricValueSnapshotMailbox;
+  // Audio thread consumes through this raw pointer so steady-state blocks avoid refcount work.
+  // Updated with release ordering alongside the shared_ptr above so a freshly-promoted
+  // mailbox's pre-seeded buffers are fully visible before the pointer is observed.
+  std::atomic<ParametricValueSnapshotMailbox*> mParametricValueSnapshotMailboxRaw = nullptr;
 
   // Tone stack modules
   std::unique_ptr<dsp::tone_stack::AbstractToneStack> mToneStack;

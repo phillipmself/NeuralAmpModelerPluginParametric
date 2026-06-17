@@ -2,6 +2,7 @@
 #include <cmath> // pow
 #include <filesystem>
 #include <iostream>
+#include <thread>
 #include <utility>
 
 #include "Colors.h"
@@ -631,7 +632,8 @@ void NeuralAmpModeler::_ApplyDSPStaging()
     mNAMPath.Set("");
     mShouldRemoveModel = false;
     mModelCleared = true;
-    std::atomic_store(&mPublishedParametricValueUpdate, std::shared_ptr<const std::vector<float>>{});
+    mParametricValueSnapshotMailboxRaw.store(nullptr, std::memory_order_release);
+    mParametricValueSnapshotMailbox.reset();
     _ClearParametricState();
     _UpdateLatency();
     _SetInputGain();
@@ -648,15 +650,21 @@ void NeuralAmpModeler::_ApplyDSPStaging()
   {
     mModel = std::move(mStagedModel);
     mStagedModel = nullptr;
-    std::atomic_store(&mPublishedParametricValueUpdate, std::shared_ptr<const std::vector<float>>{});
     if (mStagedParametricState != nullptr)
     {
       mParametricState = std::move(*mStagedParametricState);
       mStagedParametricState.reset();
+      // Promote the staged mailbox before mNewModelLoadedInDSP is set below, so the
+      // UI thread's later (non-atomic) read of mParametricValueSnapshotMailbox in
+      // _UpdateControlsFromModel always sees this new mailbox, not a stale one.
+      mParametricValueSnapshotMailbox = std::move(mStagedParametricValueSnapshotMailbox);
+      mParametricValueSnapshotMailboxRaw.store(mParametricValueSnapshotMailbox.get(), std::memory_order_release);
     }
     else
     {
       _ClearParametricState();
+      mParametricValueSnapshotMailboxRaw.store(nullptr, std::memory_order_release);
+      mParametricValueSnapshotMailbox.reset();
     }
     mNewModelLoadedInDSP = true;
     _UpdateLatency();
@@ -792,6 +800,28 @@ void NeuralAmpModeler::_ClearParametricState()
   mParametricState.dirty = false;
 }
 
+std::shared_ptr<NeuralAmpModeler::ParametricValueSnapshotMailbox>
+NeuralAmpModeler::_CreateParametricValueSnapshotMailbox(const std::vector<float>& initialValues) const
+{
+  auto mailbox = std::make_shared<ParametricValueSnapshotMailbox>();
+  mailbox->numValues = initialValues.size();
+  // Seed both buffers with the same initial values (not just the one that will be
+  // "published" first) so that whichever buffer the next publish writes into already
+  // holds valid data, and so both buffers stay pre-sized for the lifetime of the
+  // mailbox: no resize ever happens again on the UI or audio thread.
+  for (auto& snapshot : mailbox->snapshots)
+  {
+    snapshot.resize(mailbox->numValues);
+    for (size_t i = 0; i < mailbox->numValues; ++i)
+      snapshot[i] = initialValues[i];
+  }
+  mailbox->publishedIndex.store(0, std::memory_order_relaxed);
+  mailbox->publishedVersion.store(0, std::memory_order_relaxed);
+  mailbox->readingIndex.store(-1, std::memory_order_relaxed);
+  mailbox->consumedVersion = 0;
+  return mailbox;
+}
+
 NeuralAmpModeler::ParametricModelState
 NeuralAmpModeler::_CreateParametricStateFromModel(const nam::IParametricControl& parametric) const
 {
@@ -813,25 +843,65 @@ bool NeuralAmpModeler::_HasParametricState() const { return !mParametricState.sp
 
 void NeuralAmpModeler::_ConsumePublishedParametricValueUpdate()
 {
-  std::shared_ptr<const std::vector<float>> published =
-    std::atomic_exchange(&mPublishedParametricValueUpdate, std::shared_ptr<const std::vector<float>>{});
-  if (published == nullptr)
+  ParametricValueSnapshotMailbox* mailbox = mParametricValueSnapshotMailboxRaw.load(std::memory_order_acquire);
+  if (mailbox == nullptr)
     return;
 
   if (!_HasParametricState())
   {
-    assert(false && "Published parametric value update without live parametric state");
+    assert(false && "Published parametric snapshot without live parametric state");
     return;
   }
 
-  if (published->size() != mParametricState.pendingValues.size())
+  if (mailbox->numValues != mParametricState.pendingValues.size())
   {
-    assert(false && "Published parametric value update size mismatch");
+    assert(false && "Published parametric snapshot size mismatch");
     return;
   }
 
-  std::copy(published->begin(), published->end(), mParametricState.pendingValues.begin());
-  mParametricState.dirty = true;
+  // Seqlock read: an odd version means the UI thread is mid-publish (skip this attempt);
+  // an unchanged version across the copy means the read was not torn by a concurrent
+  // publish. readingIndex additionally tells the writer which buffer is unsafe to reuse
+  // for its *next* publish, in case it lands while we're still copying out of this one.
+  constexpr int kMaxAttempts = 3;
+  for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
+  {
+    const uint64_t versionBefore = mailbox->publishedVersion.load(std::memory_order_acquire);
+    if (versionBefore & 1ULL)
+      continue;
+    // Nothing new since the last block: avoid re-copying and re-marking dirty.
+    if (versionBefore == mailbox->consumedVersion)
+      return;
+
+    const size_t publishedIndex = mailbox->publishedIndex.load(std::memory_order_acquire);
+    if (publishedIndex >= mailbox->snapshots.size())
+    {
+      assert(false && "Published parametric snapshot index out of range");
+      return;
+    }
+
+    mailbox->readingIndex.store(static_cast<int>(publishedIndex), std::memory_order_release);
+    const auto& snapshot = mailbox->snapshots[publishedIndex];
+    for (size_t i = 0; i < mailbox->numValues; ++i)
+      mParametricState.pendingValues[i] = snapshot[i];
+    mailbox->readingIndex.store(-1, std::memory_order_release);
+
+    // If the version is still what we started with (and still even), no publish raced
+    // in while we copied, so the snapshot we just read is consistent. Otherwise it was
+    // torn by a concurrent publish; loop around and retry against the latest snapshot.
+    const uint64_t versionAfter = mailbox->publishedVersion.load(std::memory_order_acquire);
+    if (versionBefore == versionAfter && !(versionAfter & 1ULL))
+    {
+      mailbox->consumedVersion = versionAfter;
+      mParametricState.dirty = true;
+      return;
+    }
+  }
+
+  // Gave up after kMaxAttempts torn/in-progress reads (an extremely fast UI publisher);
+  // leave pendingValues untouched and try again on the next block rather than risk
+  // applying a half-written snapshot.
+  mailbox->readingIndex.store(-1, std::memory_order_release);
 }
 
 void NeuralAmpModeler::_ApplyPendingParametricStateToModel()
@@ -872,9 +942,37 @@ void NeuralAmpModeler::_ApplyPendingParametricStateToModel()
   mParametricState.dirty = false;
 }
 
-void NeuralAmpModeler::_PublishParametricValueUpdateFromUI(const std::vector<float>& values)
+void NeuralAmpModeler::_PublishParametricValueUpdateFromUI(const std::shared_ptr<ParametricValueSnapshotMailbox>& mailbox,
+                                                           const std::vector<float>& values)
 {
-  std::atomic_store(&mPublishedParametricValueUpdate, std::make_shared<const std::vector<float>>(values));
+  if (mailbox == nullptr)
+    return;
+
+  if (values.size() != mailbox->numValues)
+  {
+    assert(false && "Published parametric snapshot size mismatch");
+    return;
+  }
+
+  // Always write into the buffer that is *not* currently published, so the audio thread
+  // can keep reading the other one undisturbed. That buffer is normally idle, but if a
+  // previous publish is still being copied out by the audio thread when this one starts
+  // (rapid back-to-back UI publishes), readingIndex will name it; briefly yield rather
+  // than overwrite a buffer the audio thread is actively copying from.
+  const size_t currentIndex = mailbox->publishedIndex.load(std::memory_order_acquire);
+  const size_t writeIndex = 1 - currentIndex;
+  while (mailbox->readingIndex.load(std::memory_order_acquire) == static_cast<int>(writeIndex))
+    std::this_thread::yield();
+
+  // Seqlock write: bump to an odd version before touching the buffer (so a concurrent
+  // reader knows to retry), copy the new values in, publish the index, then bump to an
+  // even version to signal the write is complete and stable.
+  mailbox->publishedVersion.fetch_add(1, std::memory_order_acq_rel);
+  auto& snapshot = mailbox->snapshots[writeIndex];
+  for (size_t i = 0; i < mailbox->numValues; ++i)
+    snapshot[i] = values[i];
+  mailbox->publishedIndex.store(writeIndex, std::memory_order_release);
+  mailbox->publishedVersion.fetch_add(1, std::memory_order_release);
 }
 
 std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
@@ -906,10 +1004,12 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
     if (nam::IParametricControl* parametric = temp->GetParametricControl())
     {
       stagedParametricState = std::make_unique<ParametricModelState>(_CreateParametricStateFromModel(*parametric));
+      mStagedParametricValueSnapshotMailbox = _CreateParametricValueSnapshotMailbox(stagedParametricState->currentValues);
     }
     else
     {
       stagedParametricState.reset();
+      mStagedParametricValueSnapshotMailbox.reset();
     }
     mStagedModel = std::move(temp);
     mStagedParametricState = std::move(stagedParametricState);
@@ -925,6 +1025,7 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
       mStagedModel = nullptr;
     }
     mStagedParametricState.reset();
+    mStagedParametricValueSnapshotMailbox.reset();
     mNAMPath = previousNAMPath;
     std::cerr << "Failed to read DSP module" << std::endl;
     std::cerr << e.what() << std::endl;
@@ -1113,9 +1214,16 @@ void NeuralAmpModeler::_UpdateControlsFromModel()
       {
         if (mModel->HasParametricControls())
         {
+          // Capture the mailbox by shared_ptr value (not `this`-only) so the control's
+          // publish callback keeps the mailbox alive even if the model is swapped again
+          // before the callback fires; the lambda would otherwise reach through `this`
+          // into a mailbox that staging may have already replaced. This read is safe
+          // here only because we're on the UI thread after mNewModelLoadedInDSP was
+          // observed true, which happens-after the audio thread's promotion above.
+          const auto mailbox = mParametricValueSnapshotMailbox;
           pParametricPage->SetParametricModel(
             mParametricState.specs, mParametricState.currentValues,
-            [this](const std::vector<float>& values) { _PublishParametricValueUpdateFromUI(values); });
+            [this, mailbox](const std::vector<float>& values) { _PublishParametricValueUpdateFromUI(mailbox, values); });
         }
         else
         {
