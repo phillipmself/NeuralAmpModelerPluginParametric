@@ -180,6 +180,14 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
 
     // Misc Areas
     const auto settingsButtonArea = CornerButtonArea(b);
+    const auto parametricButtonArea = settingsButtonArea.GetTranslated(-74.f, 0.f).GetCentredInside(60.f, 24.f);
+    const auto parametricButtonStyle =
+      style
+        .WithShowValue(false)
+        .WithLabelText(IText(DEFAULT_TEXT_SIZE - 1.f, COLOR_WHITE, "Roboto-Regular", EAlign::Center, EVAlign::Middle))
+        .WithDrawShadows(false)
+        .WithRoundness(0.25f)
+        .WithFrameThickness(1.0f);
 
     // Model loader button
     auto loadModelCompletionHandler = [&](const WDL_String& fileName, const WDL_String& path) {
@@ -295,6 +303,18 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
       ->AttachControl(new NAMSettingsPageControl(b, backgroundBitmap, inputLevelBackgroundBitmap, switchHandleBitmap,
                                                  crossSVG, style, radioButtonStyle),
                       kCtrlTagSettingsBox)
+      ->Hide(true);
+
+    // Parametric overlay: button visibility is driven by _SyncParametricUIFromModel().
+    pGraphics
+      ->AttachControl(
+        new IVButtonControl(parametricButtonArea, [this](IControl* pCaller) { _ShowParametricOverlay(); }, "Params",
+                            parametricButtonStyle, true, false),
+        kCtrlTagParametricButton)
+      ->Hide(true);
+
+    pGraphics
+      ->AttachControl(new NAMParametricPageControl(b, backgroundBitmap, crossSVG, style), kCtrlTagParametricBox)
       ->Hide(true);
 
     const auto slimKnobArea = b.GetCentredInside(100.f, NAM_KNOB_HEIGHT + 24.f);
@@ -443,6 +463,7 @@ void NeuralAmpModeler::OnIdle()
         p->Hide(true);
       if (auto* p = pGraphics->GetControlWithTag(kCtrlTagSlimKnob))
         p->Hide(true);
+      _SyncParametricUIFromModel();
       pGraphics->SetAllControlsDirty();
       mModelCleared = false;
     }
@@ -1074,6 +1095,45 @@ void NeuralAmpModeler::_UpdateControlsFromModel()
       const bool show = mModel->GetSlimmableModel() != nullptr;
       pSlimIcon->Hide(!show);
     }
+    _SyncParametricUIFromModel();
+  }
+}
+
+void NeuralAmpModeler::_ShowParametricOverlay()
+{
+  if (mModel == nullptr || !mModel->HasParametricControls())
+    return;
+
+  if (auto* pGraphics = GetUI())
+  {
+    if (auto* pParametricBox = pGraphics->GetControlWithTag(kCtrlTagParametricBox))
+    {
+      if (auto* pParametricPage = pParametricBox->As<NAMParametricPageControl>())
+        pParametricPage->HideAnimated(false);
+    }
+  }
+}
+
+void NeuralAmpModeler::_CloseParametricOverlay()
+{
+  if (auto* pGraphics = GetUI())
+  {
+    if (auto* pParametricBox = pGraphics->GetControlWithTag(kCtrlTagParametricBox))
+      pParametricBox->Hide(true);
+  }
+}
+
+void NeuralAmpModeler::_SyncParametricUIFromModel()
+{
+  if (auto* pGraphics = GetUI())
+  {
+    const bool showParametricButton = mModel != nullptr && mModel->HasParametricControls();
+    if (auto* pParametricButton = pGraphics->GetControlWithTag(kCtrlTagParametricButton))
+      pParametricButton->Hide(!showParametricButton);
+
+    // Any model transition invalidates the current overlay contents. Close it until the user
+    // explicitly reopens the shell for the currently-promoted model.
+    _CloseParametricOverlay();
   }
 }
 

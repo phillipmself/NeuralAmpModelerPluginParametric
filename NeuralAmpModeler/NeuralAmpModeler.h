@@ -65,6 +65,8 @@ enum ECtrlTags
   kCtrlTagSlimmableIcon,
   kCtrlTagSlimOverlayBackdrop,
   kCtrlTagSlimKnob,
+  kCtrlTagParametricButton,
+  kCtrlTagParametricBox,
   kNumCtrlTags
 };
 
@@ -305,6 +307,12 @@ private:
 
   // Update all controls that depend on a model
   void _UpdateControlsFromModel();
+  // Opens the parametric overlay shell if the currently-loaded model supports it.
+  void _ShowParametricOverlay();
+  // Hides the parametric overlay shell immediately.
+  void _CloseParametricOverlay();
+  // Synchronizes parametric button visibility and overlay state to the currently-loaded model.
+  void _SyncParametricUIFromModel();
 
   // Make sure that the latency is reported correctly.
   void _UpdateLatency();

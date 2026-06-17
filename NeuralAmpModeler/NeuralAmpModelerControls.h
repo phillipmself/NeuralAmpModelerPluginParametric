@@ -679,29 +679,16 @@ public:
   };
 };
 
-class NAMSettingsPageControl : public IContainerBaseWithNamedChildren
+class NAMOverlayPageControlBase : public IContainerBaseWithNamedChildren
 {
 public:
-  NAMSettingsPageControl(const IRECT& bounds, const IBitmap& bitmap, const IBitmap& inputLevelBackgroundBitmap,
-                         const IBitmap& switchBitmap, ISVG closeSVG, const IVStyle& style,
-                         const IVStyle& radioButtonStyle)
+  NAMOverlayPageControlBase(const IRECT& bounds, const IBitmap& bitmap, ISVG closeSVG, int animationTime)
   : IContainerBaseWithNamedChildren(bounds)
-  , mAnimationTime(0)
   , mBitmap(bitmap)
-  , mInputLevelBackgroundBitmap(inputLevelBackgroundBitmap)
-  , mSwitchBitmap(switchBitmap)
-  , mStyle(style)
-  , mRadioButtonStyle(radioButtonStyle)
   , mCloseSVG(closeSVG)
+  , mAnimationTime(animationTime)
   {
     mIgnoreMouse = false;
-  }
-
-  void ClearModelInfo()
-  {
-    auto* modelInfoControl = static_cast<ModelInfoControl*>(GetNamedChild(mControlNames.modelInfo));
-    assert(modelInfoControl != nullptr);
-    modelInfoControl->ClearModelInfo();
   }
 
   bool OnKeyDown(float x, float y, const IKeyPress& key) override
@@ -750,20 +737,72 @@ public:
     SetDirty(true);
   }
 
-  void OnAttached() override
+protected:
+  void AddOverlayChrome(const char* title)
   {
-    const float pad = 20.0f;
     const IVStyle titleStyle = DEFAULT_STYLE.WithValueText(IText(30, COLOR_WHITE, "Michroma-Regular"))
                                  .WithDrawFrame(false)
                                  .WithShadowOffset(2.f);
+    AddNamedChildControl(new IBitmapControl(GetRECT(), mBitmap), mCommonControlNames.bitmap)->SetIgnoreMouse(true);
+    AddNamedChildControl(new IVLabelControl(GetOverlayTitleArea(), title, titleStyle), mCommonControlNames.title);
+
+    AddNamedChildControl(
+      new NAMSquareButtonControl(CornerButtonArea(GetRECT()), [this](IControl* pCaller) { HideAnimated(true); }, mCloseSVG),
+      mCommonControlNames.close);
+  }
+
+  IRECT GetOverlayTitleArea(float pad = 20.0f) const { return GetRECT().GetPadded(-(pad + 10.0f)).GetFromTop(50.0f); }
+
+  IVStyle MakeOverlayBodyStyle(const IVStyle& style, EAlign align = EAlign::Center) const
+  {
+    return style.WithDrawFrame(false).WithValueText(IText(DEFAULT_TEXT_SIZE, align, PluginColors::HELP_TEXT));
+  }
+
+private:
+  IBitmap mBitmap;
+  ISVG mCloseSVG;
+  int mAnimationTime = 200;
+  bool mWillHide = false;
+
+  struct CommonControlNames
+  {
+    const std::string bitmap = "OverlayBitmap";
+    const std::string close = "OverlayClose";
+    const std::string title = "OverlayTitle";
+  } mCommonControlNames;
+};
+
+class NAMSettingsPageControl : public NAMOverlayPageControlBase
+{
+public:
+  NAMSettingsPageControl(const IRECT& bounds, const IBitmap& bitmap, const IBitmap& inputLevelBackgroundBitmap,
+                         const IBitmap& switchBitmap, ISVG closeSVG, const IVStyle& style,
+                         const IVStyle& radioButtonStyle)
+  : NAMOverlayPageControlBase(bounds, bitmap, closeSVG, 0)
+  , mInputLevelBackgroundBitmap(inputLevelBackgroundBitmap)
+  , mSwitchBitmap(switchBitmap)
+  , mStyle(style)
+  , mRadioButtonStyle(radioButtonStyle)
+  {
+  }
+
+  void ClearModelInfo()
+  {
+    auto* modelInfoControl = static_cast<ModelInfoControl*>(GetNamedChild(mControlNames.modelInfo));
+    assert(modelInfoControl != nullptr);
+    modelInfoControl->ClearModelInfo();
+  }
+
+  void OnAttached() override
+  {
+    const float pad = 20.0f;
     const auto text = IText(DEFAULT_TEXT_SIZE, EAlign::Center, PluginColors::HELP_TEXT);
     const auto leftText = text.WithAlign(EAlign::Near);
-    const auto style = mStyle.WithDrawFrame(false).WithValueText(text);
+    const auto style = MakeOverlayBodyStyle(mStyle);
     const IVStyle leftStyle = style.WithValueText(leftText);
+    const auto titleArea = GetOverlayTitleArea(pad);
 
-    AddNamedChildControl(new IBitmapControl(GetRECT(), mBitmap), mControlNames.bitmap)->SetIgnoreMouse(true);
-    const auto titleArea = GetRECT().GetPadded(-(pad + 10.0f)).GetFromTop(50.0f);
-    AddNamedChildControl(new IVLabelControl(titleArea, "SETTINGS", titleStyle), mControlNames.title);
+    AddOverlayChrome("SETTINGS");
 
     // Attach input/output calibration controls
     {
@@ -808,12 +847,6 @@ public:
     AddNamedChildControl(new ModelInfoControl(modelInfoArea, leftStyle), mControlNames.modelInfo);
     AddNamedChildControl(new AboutControl(aboutArea, leftStyle, leftText), mControlNames.about);
 
-    auto closeAction = [&](IControl* pCaller) {
-      static_cast<NAMSettingsPageControl*>(pCaller->GetParent())->HideAnimated(true);
-    };
-    AddNamedChildControl(
-      new NAMSquareButtonControl(CornerButtonArea(GetRECT()), closeAction, mCloseSVG), mControlNames.close);
-
     OnResize();
   }
 
@@ -825,27 +858,20 @@ public:
   };
 
 private:
-  IBitmap mBitmap;
   IBitmap mInputLevelBackgroundBitmap;
   IBitmap mSwitchBitmap;
   IVStyle mStyle;
   IVStyle mRadioButtonStyle;
-  ISVG mCloseSVG;
-  int mAnimationTime = 200;
-  bool mWillHide = false;
 
   // Names for controls
   // Make sure that these are all unique and that you use them with AddNamedChildControl
   struct ControlNames
   {
     const std::string about = "About";
-    const std::string bitmap = "Bitmap";
     const std::string calibrateInput = "CalibrateInput";
-    const std::string close = "Close";
     const std::string inputCalibrationLevel = "InputCalibrationLevel";
     const std::string modelInfo = "ModelInfo";
     const std::string outputMode = "OutputMode";
-    const std::string title = "Title";
   } mControlNames;
 
   class InputLevelControl : public IEditableTextControl
@@ -1081,4 +1107,39 @@ private:
     IVStyle mStyle;
     IText mText;
   };
+};
+
+// Full-window overlay shell for parametric models, modeled after NAMSettingsPageControl.
+// Intentionally has no per-parameter controls yet; this is the show/hide shell only.
+class NAMParametricPageControl : public NAMOverlayPageControlBase
+{
+public:
+  NAMParametricPageControl(const IRECT& bounds, const IBitmap& bitmap, ISVG closeSVG, const IVStyle& style)
+  : NAMOverlayPageControlBase(bounds, bitmap, closeSVG, 200)
+  , mStyle(style)
+  {
+  }
+
+  void OnAttached() override
+  {
+    const auto bodyStyle = MakeOverlayBodyStyle(mStyle);
+    AddOverlayChrome("PARAMETRIC CONTROLS");
+
+    const auto placeholderArea = GetRECT().GetMidVPadded(40.0f);
+    AddNamedChildControl(
+      new IVLabelControl(placeholderArea, "Model-specific controls are coming soon.", bodyStyle),
+      mControlNames.placeholder);
+
+    OnResize();
+  }
+
+private:
+  IVStyle mStyle;
+
+  // Names for controls
+  // Make sure that these are all unique and that you use them with AddNamedChildControl
+  struct ControlNames
+  {
+    const std::string placeholder = "Placeholder";
+  } mControlNames;
 };
