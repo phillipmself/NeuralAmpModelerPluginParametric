@@ -601,6 +601,7 @@ void NeuralAmpModeler::_ApplyDSPStaging()
     mNAMPath.Set("");
     mShouldRemoveModel = false;
     mModelCleared = true;
+    _ClearParametricState();
     _UpdateLatency();
     _SetInputGain();
     _SetOutputGain();
@@ -616,6 +617,15 @@ void NeuralAmpModeler::_ApplyDSPStaging()
   {
     mModel = std::move(mStagedModel);
     mStagedModel = nullptr;
+    if (mStagedParametricState != nullptr)
+    {
+      mParametricState = std::move(*mStagedParametricState);
+      mStagedParametricState.reset();
+    }
+    else
+    {
+      _ClearParametricState();
+    }
     mNewModelLoadedInDSP = true;
     _UpdateLatency();
     _SetInputGain();
@@ -742,6 +752,33 @@ void NeuralAmpModeler::_ApplySlimParamToLoadedNAMs()
   apply(mStagedModel.get());
 }
 
+void NeuralAmpModeler::_ClearParametricState()
+{
+  mParametricState.specs.clear();
+  mParametricState.currentValues.clear();
+  mParametricState.pendingValues.clear();
+  mParametricState.dirty = false;
+}
+
+NeuralAmpModeler::ParametricModelState
+NeuralAmpModeler::_CreateParametricStateFromModel(const nam::IParametricControl& parametric) const
+{
+  ParametricModelState state;
+  state.specs = parametric.GetParamSpecs();
+  const size_t numParams = state.specs.size();
+  state.currentValues.resize(numParams);
+  state.pendingValues.resize(numParams);
+  for (size_t i = 0; i < numParams; i++)
+  {
+    state.currentValues[i] = state.specs[i].defaultValue;
+    state.pendingValues[i] = state.specs[i].defaultValue;
+  }
+  state.dirty = false;
+  return state;
+}
+
+bool NeuralAmpModeler::_HasParametricState() const { return !mParametricState.specs.empty(); }
+
 std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
 {
   WDL_String previousNAMPath = mNAMPath;
@@ -762,12 +799,22 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
     }
 
     std::unique_ptr<ResamplingNAM> temp = std::make_unique<ResamplingNAM>(std::move(model), GetSampleRate());
+    std::unique_ptr<ParametricModelState> stagedParametricState;
     temp->Reset(GetSampleRate(), GetBlockSize());
     if (nam::SlimmableModel* slimmable = temp->GetSlimmableModel())
     {
       slimmable->SetSlimmableSize(GetParam(kSlim)->Value());
     }
+    if (nam::IParametricControl* parametric = temp->GetParametricControl())
+    {
+      stagedParametricState = std::make_unique<ParametricModelState>(_CreateParametricStateFromModel(*parametric));
+    }
+    else
+    {
+      stagedParametricState.reset();
+    }
     mStagedModel = std::move(temp);
+    mStagedParametricState = std::move(stagedParametricState);
     mNAMPath = modelPath;
     SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadedModel, mNAMPath.GetLength(), mNAMPath.Get());
   }
@@ -779,6 +826,7 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
     {
       mStagedModel = nullptr;
     }
+    mStagedParametricState.reset();
     mNAMPath = previousNAMPath;
     std::cerr << "Failed to read DSP module" << std::endl;
     std::cerr << e.what() << std::endl;

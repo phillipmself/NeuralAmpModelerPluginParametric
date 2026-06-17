@@ -260,6 +260,29 @@ private:
   // Resetting for models and IRs, called by OnReset
   void _ResetModelAndIR(const double sampleRate, const int maxBlockSize);
 
+  // Plugin-owned shadow state for the currently-staged/loaded parametric model, if any.
+  // Populated from ParamSpec defaults in spec order. Live state is swapped only when the
+  // staged model is promoted on the audio thread, so model/state transitions stay aligned.
+  struct ParametricModelState
+  {
+    // Ordered copy of the model's ParamSpec metadata (name/min/max/default).
+    std::vector<nam::ParamSpec> specs;
+    // Last values committed to the DSP (or defaults, if never applied).
+    std::vector<float> currentValues;
+    // Values waiting to be committed to the DSP on the audio thread.
+    std::vector<float> pendingValues;
+    // True when pendingValues differs from what's been committed and needs applying.
+    bool dirty = false;
+  };
+
+  // Parametric model shadow state helpers.
+  // Clears the live specs/values/dirty bookkeeping for the promoted model.
+  void _ClearParametricState();
+  // Builds shadow state from the model's ParamSpec defaults, in spec order.
+  ParametricModelState _CreateParametricStateFromModel(const nam::IParametricControl& parametric) const;
+  // Cheap check for whether promoted plugin-owned parametric shadow state is populated.
+  bool _HasParametricState() const;
+
   void _SetInputGain();
   void _SetOutputGain();
   void _ApplySlimParamToLoadedNAMs();
@@ -313,6 +336,9 @@ private:
 
   std::atomic<bool> mNewModelLoadedInDSP = false;
   std::atomic<bool> mModelCleared = false;
+
+  ParametricModelState mParametricState;
+  std::unique_ptr<ParametricModelState> mStagedParametricState;
 
   // Tone stack modules
   std::unique_ptr<dsp::tone_stack::AbstractToneStack> mToneStack;
