@@ -60,11 +60,85 @@ void NeuralAmpModeler::_UnserializeApplyConfig(nlohmann::json& config)
   if (mNAMPath.GetLength())
   {
     _StageModel(mNAMPath);
+    if (config.contains("ParametricValues") && config["ParametricValues"].is_array())
+    {
+      std::vector<RestoredParametricValue> restoredValues;
+      restoredValues.reserve(config["ParametricValues"].size());
+      for (const auto& entry : config["ParametricValues"])
+      {
+        if (!entry.is_object() || !entry.contains("name") || !entry.contains("value") || !entry["name"].is_string()
+            || !entry["value"].is_number())
+          continue;
+
+        RestoredParametricValue restoredValue;
+        restoredValue.name = entry["name"].get<std::string>();
+        restoredValue.value = entry["value"].get<float>();
+        if (entry.contains("index") && entry["index"].is_number_integer())
+          restoredValue.index = entry["index"].get<int32_t>();
+        restoredValues.push_back(std::move(restoredValue));
+      }
+      _ApplyRestoredParametricValuesToStagedState(restoredValues);
+    }
   }
   if (mIRPath.GetLength())
   {
     _StageIR(mIRPath);
   }
+}
+
+bool _TryReadParametricStateExtension(const iplug::IByteChunk& chunk, int startPos, nlohmann::json& config, int& endPos)
+{
+  endPos = startPos;
+  if (startPos < 0 || startPos >= chunk.Size())
+    return false;
+
+  WDL_String marker;
+  int pos = chunk.GetStr(marker, startPos);
+  if (pos < 0 || strcmp(marker.Get(), kParametricStateChunkMagic) != 0)
+    return false;
+
+  uint32_t payloadVersion = 0;
+  pos = chunk.Get(&payloadVersion, pos);
+  if (pos < 0 || payloadVersion != kParametricStateChunkVersion)
+    return false;
+
+  int32_t payloadSize = 0;
+  pos = chunk.Get(&payloadSize, pos);
+  if (pos < 0 || payloadSize < 0)
+    return false;
+
+  // The extension is self-delimiting so future payload revisions can be skipped without
+  // desynchronizing any later state data that may follow in the same chunk stream.
+  const int payloadEndPos = pos + payloadSize;
+  if (payloadEndPos < pos || payloadEndPos > chunk.Size())
+    return false;
+
+  endPos = payloadEndPos;
+
+  int32_t numValues = 0;
+  pos = chunk.Get(&numValues, pos);
+  if (pos < 0 || numValues < 0)
+    return false;
+
+  auto values = nlohmann::json::array();
+  for (int32_t i = 0; i < numValues; ++i)
+  {
+    int32_t savedIndex = -1;
+    WDL_String paramName;
+    float value = 0.0f;
+    pos = chunk.Get(&savedIndex, pos);
+    pos = chunk.GetStr(paramName, pos);
+    pos = chunk.Get(&value, pos);
+    if (pos < 0)
+      return false;
+    values.push_back({{"index", savedIndex}, {"name", std::string(paramName.Get())}, {"value", value}});
+  }
+
+  if (pos != payloadEndPos)
+    return false;
+
+  config["ParametricValues"] = std::move(values);
+  return true;
 }
 
 // Unserialize NAM Path, IR path, then named keys
@@ -298,6 +372,12 @@ int NeuralAmpModeler::_UnserializeStateWithKnownVersion(const iplug::IByteChunk&
     // You shouldn't be here...
     assert(false);
   }
+  if (pos < chunk.Size())
+  {
+    int extensionEndPos = pos;
+    _TryReadParametricStateExtension(chunk, pos, config, extensionEndPos);
+    pos = extensionEndPos;
+  }
   _UnserializeApplyConfig(config);
   return pos;
 }
@@ -306,6 +386,12 @@ int NeuralAmpModeler::_UnserializeStateWithUnknownVersion(const iplug::IByteChun
 {
   nlohmann::json config;
   int pos = _GetConfigFrom_Earlier(chunk, startPos, config);
+  if (pos < chunk.Size())
+  {
+    int extensionEndPos = pos;
+    _TryReadParametricStateExtension(chunk, pos, config, extensionEndPos);
+    pos = extensionEndPos;
+  }
   _UnserializeApplyConfig(config);
   return pos;
 }

@@ -74,6 +74,8 @@ const std::string kCalibrateInputParamName = "CalibrateInput";
 const bool kDefaultCalibrateInput = false;
 const std::string kInputCalibrationLevelParamName = "InputCalibrationLevel";
 const double kDefaultInputCalibrationLevel = 12.0;
+const char* const kParametricStateChunkMagic = "###ParametricState###";
+const uint32_t kParametricStateChunkVersion = 1;
 
 
 NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
@@ -490,7 +492,32 @@ bool NeuralAmpModeler::SerializeState(IByteChunk& chunk) const
   // when we unserialize)
   chunk.PutStr(mNAMPath.Get());
   chunk.PutStr(mIRPath.Get());
-  return SerializeParams(chunk);
+  if (!SerializeParams(chunk))
+    return false;
+
+  std::vector<nam::ParamSpec> specs;
+  std::vector<float> values;
+  if (!_TryGetParametricStateForSerialization(specs, values))
+    return true;
+
+  // Build the parametric payload separately so the outer chunk can prefix it with a
+  // byte size; that lets future readers skip unknown payload revisions safely.
+  IByteChunk payload;
+  const int32_t numValues = static_cast<int32_t>(std::min(specs.size(), values.size()));
+  payload.Put(&numValues);
+  for (int32_t i = 0; i < numValues; ++i)
+  {
+    payload.Put(&i);
+    payload.PutStr(specs[static_cast<size_t>(i)].name.c_str());
+    payload.Put(&values[static_cast<size_t>(i)]);
+  }
+
+  chunk.PutStr(kParametricStateChunkMagic);
+  chunk.Put(&kParametricStateChunkVersion);
+  const int32_t payloadSize = payload.Size();
+  chunk.Put(&payloadSize);
+  chunk.PutBytes(payload.GetData(), payloadSize);
+  return true;
 }
 
 int NeuralAmpModeler::UnserializeState(const IByteChunk& chunk, int startPos)
@@ -633,7 +660,8 @@ void NeuralAmpModeler::_ApplyDSPStaging()
     mShouldRemoveModel = false;
     mModelCleared = true;
     mParametricValueSnapshotMailboxRaw.store(nullptr, std::memory_order_release);
-    mParametricValueSnapshotMailbox.reset();
+    mParametricSerializationSource.reset();
+    _SetActiveParametricSerializationSource(nullptr);
     _ClearParametricState();
     _UpdateLatency();
     _SetInputGain();
@@ -654,17 +682,21 @@ void NeuralAmpModeler::_ApplyDSPStaging()
     {
       mParametricState = std::move(*mStagedParametricState);
       mStagedParametricState.reset();
-      // Promote the staged mailbox before mNewModelLoadedInDSP is set below, so the
-      // UI thread's later (non-atomic) read of mParametricValueSnapshotMailbox in
-      // _UpdateControlsFromModel always sees this new mailbox, not a stale one.
-      mParametricValueSnapshotMailbox = std::move(mStagedParametricValueSnapshotMailbox);
-      mParametricValueSnapshotMailboxRaw.store(mParametricValueSnapshotMailbox.get(), std::memory_order_release);
+      // Promote the staged serialization source before mNewModelLoadedInDSP is set below,
+      // so the UI thread's later read in _UpdateControlsFromModel always sees this new
+      // source/mailbox, not a stale one.
+      mParametricSerializationSource = std::move(mStagedParametricSerializationSource);
+      mParametricValueSnapshotMailboxRaw.store(
+        mParametricSerializationSource != nullptr ? mParametricSerializationSource->mailbox.get() : nullptr,
+        std::memory_order_release);
+      _SetActiveParametricSerializationSource(mParametricSerializationSource);
     }
     else
     {
       _ClearParametricState();
       mParametricValueSnapshotMailboxRaw.store(nullptr, std::memory_order_release);
-      mParametricValueSnapshotMailbox.reset();
+      mParametricSerializationSource.reset();
+      _SetActiveParametricSerializationSource(nullptr);
     }
     mNewModelLoadedInDSP = true;
     _UpdateLatency();
@@ -822,6 +854,76 @@ NeuralAmpModeler::_CreateParametricValueSnapshotMailbox(const std::vector<float>
   return mailbox;
 }
 
+std::shared_ptr<NeuralAmpModeler::ParametricSerializationSource>
+NeuralAmpModeler::_CreateParametricSerializationSource(const std::vector<nam::ParamSpec>& specs,
+                                                       const std::vector<float>& initialValues) const
+{
+  auto source = std::make_shared<ParametricSerializationSource>();
+  source->specs = specs;
+  source->mailbox = _CreateParametricValueSnapshotMailbox(initialValues);
+  return source;
+}
+
+bool NeuralAmpModeler::_TryCopyLatestPublishedParametricValues(const ParametricValueSnapshotMailbox& mailbox,
+                                                               std::vector<float>& values) const
+{
+  if (mailbox.numValues != values.size())
+    return false;
+
+  constexpr int kMaxAttempts = 3;
+  for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
+  {
+    const uint64_t versionBefore = mailbox.publishedVersion.load(std::memory_order_acquire);
+    if (versionBefore & 1ULL)
+      continue;
+
+    const size_t publishedIndex = mailbox.publishedIndex.load(std::memory_order_acquire);
+    if (publishedIndex >= mailbox.snapshots.size())
+      return false;
+
+    const auto& snapshot = mailbox.snapshots[publishedIndex];
+    for (size_t i = 0; i < mailbox.numValues; ++i)
+      values[i] = snapshot[i];
+
+    const uint64_t versionAfter = mailbox.publishedVersion.load(std::memory_order_acquire);
+    if (versionBefore == versionAfter && !(versionAfter & 1ULL))
+      return true;
+  }
+
+  return false;
+}
+
+bool NeuralAmpModeler::_TryGetParametricStateForSerialization(std::vector<nam::ParamSpec>& specs,
+                                                              std::vector<float>& values) const
+{
+  const auto source = std::atomic_load_explicit(&mActiveParametricSerializationSource, std::memory_order_acquire);
+  if (source == nullptr || source->specs.empty() || source->mailbox == nullptr)
+    return false;
+
+  specs = source->specs;
+  values.resize(specs.size());
+  for (size_t i = 0; i < specs.size(); ++i)
+  {
+    // Start from defaults so a torn/temporarily unavailable mailbox read still yields a
+    // valid, clamped serialization payload without touching live audio-thread state.
+    values[i] = std::clamp(specs[i].defaultValue, specs[i].min, specs[i].max);
+  }
+
+  _TryCopyLatestPublishedParametricValues(*source->mailbox, values);
+  for (size_t i = 0; i < specs.size(); ++i)
+    values[i] = std::clamp(values[i], specs[i].min, specs[i].max);
+
+  return true;
+}
+
+void NeuralAmpModeler::_SetActiveParametricSerializationSource(
+  const std::shared_ptr<ParametricSerializationSource>& source)
+{
+  std::atomic_store_explicit(&mActiveParametricSerializationSource,
+                             std::shared_ptr<const ParametricSerializationSource>(source),
+                             std::memory_order_release);
+}
+
 NeuralAmpModeler::ParametricModelState
 NeuralAmpModeler::_CreateParametricStateFromModel(const nam::IParametricControl& parametric) const
 {
@@ -840,6 +942,95 @@ NeuralAmpModeler::_CreateParametricStateFromModel(const nam::IParametricControl&
 }
 
 bool NeuralAmpModeler::_HasParametricState() const { return !mParametricState.specs.empty(); }
+
+void NeuralAmpModeler::_ApplyRestoredParametricValuesToStagedState(
+  const std::vector<RestoredParametricValue>& restoredValues)
+{
+  if (mStagedParametricState == nullptr || restoredValues.empty())
+    return;
+
+  bool restoredAny = false;
+  ParametricModelState& stagedState = *mStagedParametricState;
+  const size_t numParams = stagedState.specs.size();
+  if (stagedState.currentValues.size() != numParams || stagedState.pendingValues.size() != numParams)
+    return;
+
+  std::vector<bool> matchedSpecs(numParams, false);
+  std::vector<bool> usedRestoredValues(restoredValues.size(), false);
+  auto applyRestoredValue = [&](const size_t specIndex, const float rawValue) {
+    const float restoredValue = std::clamp(rawValue, stagedState.specs[specIndex].min, stagedState.specs[specIndex].max);
+    stagedState.currentValues[specIndex] = restoredValue;
+    stagedState.pendingValues[specIndex] = restoredValue;
+    matchedSpecs[specIndex] = true;
+    restoredAny = true;
+  };
+
+  for (size_t restoredIndex = 0; restoredIndex < restoredValues.size(); ++restoredIndex)
+  {
+    const RestoredParametricValue& restored = restoredValues[restoredIndex];
+    if (restored.index < 0)
+      continue;
+    const size_t specIndex = static_cast<size_t>(restored.index);
+    if (specIndex >= numParams || matchedSpecs[specIndex])
+      continue;
+    if (stagedState.specs[specIndex].name != restored.name)
+      continue;
+    applyRestoredValue(specIndex, restored.value);
+    usedRestoredValues[restoredIndex] = true;
+  }
+
+  // Only fall back to name-based restore when the name is unique on both sides; that
+  // preserves compatibility with older saves without collapsing duplicate display names.
+  std::unordered_map<std::string, int> unmatchedCurrentNameCounts;
+  std::unordered_map<std::string, int> unmatchedRestoredNameCounts;
+  std::unordered_map<std::string, size_t> uniqueCurrentIndexByName;
+  std::unordered_map<std::string, size_t> uniqueRestoredIndexByName;
+
+  for (size_t specIndex = 0; specIndex < numParams; ++specIndex)
+  {
+    if (matchedSpecs[specIndex])
+      continue;
+    const std::string& name = stagedState.specs[specIndex].name;
+    ++unmatchedCurrentNameCounts[name];
+    uniqueCurrentIndexByName[name] = specIndex;
+  }
+
+  for (size_t restoredIndex = 0; restoredIndex < restoredValues.size(); ++restoredIndex)
+  {
+    if (usedRestoredValues[restoredIndex])
+      continue;
+    const std::string& name = restoredValues[restoredIndex].name;
+    ++unmatchedRestoredNameCounts[name];
+    uniqueRestoredIndexByName[name] = restoredIndex;
+  }
+
+  for (const auto& currentEntry : unmatchedCurrentNameCounts)
+  {
+    const std::string& name = currentEntry.first;
+    const int currentCount = currentEntry.second;
+    if (currentCount != 1)
+      continue;
+    const auto restoredCountIt = unmatchedRestoredNameCounts.find(name);
+    if (restoredCountIt == unmatchedRestoredNameCounts.end() || restoredCountIt->second != 1)
+      continue;
+
+    const size_t specIndex = uniqueCurrentIndexByName[name];
+    const size_t restoredIndex = uniqueRestoredIndexByName[name];
+    if (matchedSpecs[specIndex] || usedRestoredValues[restoredIndex])
+      continue;
+
+    applyRestoredValue(specIndex, restoredValues[restoredIndex].value);
+    usedRestoredValues[restoredIndex] = true;
+  }
+
+  if (!restoredAny)
+    return;
+
+  stagedState.dirty = true;
+  mStagedParametricSerializationSource =
+    _CreateParametricSerializationSource(stagedState.specs, stagedState.currentValues);
+  _SetActiveParametricSerializationSource(mStagedParametricSerializationSource);
+}
 
 void NeuralAmpModeler::_ConsumePublishedParametricValueUpdate()
 {
@@ -1004,12 +1195,15 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
     if (nam::IParametricControl* parametric = temp->GetParametricControl())
     {
       stagedParametricState = std::make_unique<ParametricModelState>(_CreateParametricStateFromModel(*parametric));
-      mStagedParametricValueSnapshotMailbox = _CreateParametricValueSnapshotMailbox(stagedParametricState->currentValues);
+      mStagedParametricSerializationSource =
+        _CreateParametricSerializationSource(stagedParametricState->specs, stagedParametricState->currentValues);
+      _SetActiveParametricSerializationSource(mStagedParametricSerializationSource);
     }
     else
     {
       stagedParametricState.reset();
-      mStagedParametricValueSnapshotMailbox.reset();
+      mStagedParametricSerializationSource.reset();
+      _SetActiveParametricSerializationSource(nullptr);
     }
     mStagedModel = std::move(temp);
     mStagedParametricState = std::move(stagedParametricState);
@@ -1025,7 +1219,8 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
       mStagedModel = nullptr;
     }
     mStagedParametricState.reset();
-    mStagedParametricValueSnapshotMailbox.reset();
+    mStagedParametricSerializationSource.reset();
+    _SetActiveParametricSerializationSource(mParametricSerializationSource);
     mNAMPath = previousNAMPath;
     std::cerr << "Failed to read DSP module" << std::endl;
     std::cerr << e.what() << std::endl;
@@ -1220,7 +1415,8 @@ void NeuralAmpModeler::_UpdateControlsFromModel()
           // into a mailbox that staging may have already replaced. This read is safe
           // here only because we're on the UI thread after mNewModelLoadedInDSP was
           // observed true, which happens-after the audio thread's promotion above.
-          const auto mailbox = mParametricValueSnapshotMailbox;
+          const auto mailbox =
+            mParametricSerializationSource != nullptr ? mParametricSerializationSource->mailbox : nullptr;
           pParametricPage->SetParametricModel(
             mParametricState.specs, mParametricState.currentValues,
             [this, mailbox](const std::vector<float>& values) { _PublishParametricValueUpdateFromUI(mailbox, values); });

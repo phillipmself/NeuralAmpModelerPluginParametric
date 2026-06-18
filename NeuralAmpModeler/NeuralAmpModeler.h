@@ -2,6 +2,11 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "../AudioDSPTools/dsp/ImpulseResponse.h"
 #include "../AudioDSPTools/dsp/NoiseGate.h"
@@ -304,6 +309,22 @@ private:
     uint64_t consumedVersion = 0;
   };
 
+  // Immutable serialization-side view of a parametric model. Specs never change after
+  // construction; the mailbox carries the latest values without SerializeState() having
+  // to touch audio-thread-owned live/staged shadow state directly.
+  struct ParametricSerializationSource
+  {
+    std::vector<nam::ParamSpec> specs;
+    std::shared_ptr<ParametricValueSnapshotMailbox> mailbox;
+  };
+
+  struct RestoredParametricValue
+  {
+    int32_t index = -1;
+    std::string name;
+    float value = 0.0f;
+  };
+
   // Parametric model shadow state helpers.
   // Clears the live specs/values/dirty bookkeeping for the promoted model.
   void _ClearParametricState();
@@ -312,8 +333,24 @@ private:
   // Allocates and seeds a per-model double-buffer mailbox for full-state snapshot publication.
   std::shared_ptr<ParametricValueSnapshotMailbox>
   _CreateParametricValueSnapshotMailbox(const std::vector<float>& initialValues) const;
+  // Binds immutable specs to a pre-seeded mailbox so state saving can read stable
+  // metadata while values continue to flow through the mailbox snapshot path.
+  std::shared_ptr<ParametricSerializationSource>
+  _CreateParametricSerializationSource(const std::vector<nam::ParamSpec>& specs,
+                                       const std::vector<float>& initialValues) const;
+  // Copies the latest stable UI-published snapshot into values if one is available.
+  bool _TryCopyLatestPublishedParametricValues(const ParametricValueSnapshotMailbox& mailbox,
+                                               std::vector<float>& values) const;
+  // Picks the currently-active immutable serialization source. This is updated to point
+  // at staged state during in-flight swaps so saved paths and saved values stay aligned.
+  bool _TryGetParametricStateForSerialization(std::vector<nam::ParamSpec>& specs, std::vector<float>& values) const;
+  void _SetActiveParametricSerializationSource(const std::shared_ptr<ParametricSerializationSource>& source);
   // Cheap check for whether promoted plugin-owned parametric shadow state is populated.
   bool _HasParametricState() const;
+  // After a staged model load during state restore, matches saved values by parameter
+  // identity, clamps them to the current spec ranges, and marks them dirty so the audio
+  // thread can commit them before the model processes its first block.
+  void _ApplyRestoredParametricValuesToStagedState(const std::vector<RestoredParametricValue>& restoredValues);
   // Audio-thread only: consumes the latest published full-state snapshot, if any, into
   // mParametricState.pendingValues and marks it dirty.
   void _ConsumePublishedParametricValueUpdate();
@@ -389,17 +426,18 @@ private:
 
   ParametricModelState mParametricState;
   std::unique_ptr<ParametricModelState> mStagedParametricState;
-  // Cross-thread mailbox for UI/control writes. A new mailbox is allocated and seeded on
-  // model staging/load, then publishes whole snapshots through two pre-sized buffers.
-  // The UI thread's lambda capture (see _UpdateControlsFromModel) holds its own copy of
-  // this shared_ptr, taken only after observing mNewModelLoadedInDSP go true; that
-  // (already-existing) flag is what makes the plain, non-atomic read of this member safe
-  // from the UI thread, since the audio thread always writes it before setting the flag.
-  std::shared_ptr<ParametricValueSnapshotMailbox> mParametricValueSnapshotMailbox;
-  std::shared_ptr<ParametricValueSnapshotMailbox> mStagedParametricValueSnapshotMailbox;
+  // Live/staged immutable serialization sources. Each one owns the mailbox used both for
+  // UI/control snapshot publication and for state saving.
+  std::shared_ptr<ParametricSerializationSource> mParametricSerializationSource;
+  std::shared_ptr<ParametricSerializationSource> mStagedParametricSerializationSource;
+  // SerializeState() atomically loads this pointer so it never races the audio thread's
+  // promotion/reset of live shadow state. During a staged swap, this points at the
+  // staged source so the saved model path and saved param values stay aligned.
+  std::shared_ptr<const ParametricSerializationSource> mActiveParametricSerializationSource;
   // Audio thread consumes through this raw pointer so steady-state blocks avoid refcount work.
-  // Updated with release ordering alongside the shared_ptr above so a freshly-promoted
-  // mailbox's pre-seeded buffers are fully visible before the pointer is observed.
+  // Updated with release ordering alongside the promoted serialization source so a
+  // freshly-promoted mailbox's pre-seeded buffers are fully visible before the pointer
+  // is observed.
   std::atomic<ParametricValueSnapshotMailbox*> mParametricValueSnapshotMailboxRaw = nullptr;
 
   // Tone stack modules
