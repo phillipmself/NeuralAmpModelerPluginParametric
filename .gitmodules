@@ -10,4 +10,4 @@
 [submodule "NeuralAmpModelerCore"]
 	path = NeuralAmpModelerCore
 	url = https://github.com/phillipmself/NeuralAmpModelerCoreParametric.git
-	branch = feature/nam-a2-parametric
+	branch = feature/parametric-hypernetwork
