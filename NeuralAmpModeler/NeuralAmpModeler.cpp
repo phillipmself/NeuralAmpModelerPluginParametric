@@ -958,7 +958,13 @@ void NeuralAmpModeler::_ApplyRestoredParametricValuesToStagedState(
   std::vector<bool> matchedSpecs(numParams, false);
   std::vector<bool> usedRestoredValues(restoredValues.size(), false);
   auto applyRestoredValue = [&](const size_t specIndex, const float rawValue) {
-    const float restoredValue = std::clamp(rawValue, stagedState.specs[specIndex].min, stagedState.specs[specIndex].max);
+    const nam::ParamSpec& spec = stagedState.specs[specIndex];
+    // Switch values are discrete indices; bound them by their valid index range rather than
+    // the spec's continuous [min, max] metadata, which could otherwise turn a persisted whole
+    // index into a fractional value the DSP rejects.
+    const float restoredValue = spec.type == "switch"
+      ? std::clamp(rawValue, 0.0f, static_cast<float>(spec.enum_names.size() - 1))
+      : std::clamp(rawValue, spec.min, spec.max);
     stagedState.currentValues[specIndex] = restoredValue;
     stagedState.pendingValues[specIndex] = restoredValue;
     matchedSpecs[specIndex] = true;

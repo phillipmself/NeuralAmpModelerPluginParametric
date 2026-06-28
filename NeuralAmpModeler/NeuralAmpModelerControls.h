@@ -1155,7 +1155,12 @@ public:
     for (size_t i = 0; i < mSpecs.size(); ++i)
     {
       const float seededValue = i < values.size() ? values[i] : mSpecs[i].defaultValue;
-      mValues[i] = std::clamp(seededValue, mSpecs[i].min, mSpecs[i].max);
+      // Switch values are discrete indices; bound them by their valid index range rather
+      // than the spec's continuous [min, max] metadata, which would otherwise clamp a whole
+      // index into a fractional value the DSP rejects.
+      mValues[i] = _IsSwitchSpec(mSpecs[i])
+                     ? std::clamp(seededValue, 0.0f, static_cast<float>(mSpecs[i].enum_names.size() - 1))
+                     : std::clamp(seededValue, mSpecs[i].min, mSpecs[i].max);
     }
     mOnValuesChanged = std::move(onValuesChanged);
     _RebuildParameterControls();
