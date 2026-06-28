@@ -1250,6 +1250,91 @@ private:
     RealValueChangedCallback mOnChanged;
   };
 
+  // Vertical radio-button group for "switch" specs. Subclasses IVTabSwitchControl (not
+  // IVRadioButtonControl) because only the tab-switch base accepts a runtime-sized label
+  // list; the radio-button visuals are replicated in DrawWidget below.
+  class ParametricSwitchControl : public IVTabSwitchControl
+  {
+  public:
+    using RealValueChangedCallback = std::function<void(float)>;
+
+    ParametricSwitchControl(const IRECT& bounds, const nam::ParamSpec& spec, const float initialValue,
+                            const IVStyle& style, RealValueChangedCallback onChanged)
+    : IVTabSwitchControl(bounds, nullptr, _MakeLabelPointers(spec), spec.name.c_str(), style, EVShape::Ellipse,
+                         EDirection::Vertical)
+    , mSpec(spec)
+    , mOnChanged(std::move(onChanged))
+    {
+      mText.mAlign = mStyle.valueText.mAlign = EAlign::Near;
+      mText.mVAlign = mStyle.valueText.mVAlign = EVAlign::Middle;
+      _SetSelectedIndex(_IndexFromValue(initialValue), false);
+    }
+
+    void DrawWidget(IGraphics& g) override
+    {
+      const int selected = GetSelectedIdx();
+      for (int i = 0; i < mNumStates; ++i)
+      {
+        IRECT r = mButtons.Get()[i];
+        DrawButton(g, r.GetFromLeft(mButtonAreaWidth).GetCentredInside(mButtonSize), i == selected,
+                   mMouseOverButton == i, ETabSegment::Mid, IsDisabled() || GetStateDisabled(i));
+        if (mTabLabels.Get(i))
+        {
+          const IRECT labelRect = r.GetFromRight(r.W() - mButtonAreaWidth);
+          g.DrawText(mStyle.valueText.WithFGColor(i == selected ? GetColor(kON) : GetColor(kX1)),
+                     mTabLabels.Get(i)->Get(), labelRect, &mBlend);
+        }
+      }
+    }
+
+    void SetDirty(bool triggerAction, int valIdx = kNoValIdx) override
+    {
+      IVTabSwitchControl::SetDirty(false, valIdx);
+      if (mOnChanged != nullptr && triggerAction)
+        mOnChanged(static_cast<float>(GetSelectedIdx()));
+    }
+
+    void OnMouseDblClick(float x, float y, const IMouseMod& mod) override
+    {
+      _SetSelectedIndex(_IndexFromValue(mSpec.defaultValue), true);
+    }
+
+  private:
+    static std::vector<const char*> _MakeLabelPointers(const nam::ParamSpec& spec)
+    {
+      // The base ctor deep-copies each label into a WDL_String, so these pointers only
+      // need to stay valid for the duration of construction (spec outlives this call).
+      std::vector<const char*> labels;
+      labels.reserve(spec.enum_names.size());
+      for (const std::string& name : spec.enum_names)
+        labels.push_back(name.c_str());
+      return labels;
+    }
+
+    int _IndexFromValue(const float value) const
+    {
+      return std::clamp(static_cast<int>(std::lround(value)), 0, std::max(0, mNumStates - 1));
+    }
+
+    void _SetSelectedIndex(const int index, const bool triggerAction)
+    {
+      const int clamped = std::clamp(index, 0, std::max(0, mNumStates - 1));
+      const double normalized = mNumStates <= 1 ? 0.0 : static_cast<double>(clamped) / (mNumStates - 1);
+      SetValue(normalized);
+      SetDirty(triggerAction);
+    }
+
+    nam::ParamSpec mSpec;
+    RealValueChangedCallback mOnChanged;
+    float mButtonSize = 10.0f;
+    float mButtonAreaWidth = 30.0f;
+  };
+
+  static bool _IsSwitchSpec(const nam::ParamSpec& spec)
+  {
+    return spec.type == "switch" && spec.enum_names.size() >= 2;
+  }
+
   IRECT GetContentArea() const { return GetRECT().GetPadded(-24.f).GetReducedFromTop(70.f).GetReducedFromBottom(10.f); }
 
   static int GetNumColumns(const int numControls)
@@ -1303,10 +1388,22 @@ private:
       mStyle
         .WithLabelText(IText(DEFAULT_TEXT_SIZE + 3.f, EVAlign::Middle, PluginColors::NAM_THEMEFONTCOLOR))
         .WithValueText(IText(DEFAULT_TEXT_SIZE + 3.f, EVAlign::Bottom, PluginColors::NAM_THEMEFONTCOLOR));
+    // Radio bullets are drawn via kPR (selected) / kFG (unselected); the base NAM style
+    // maps those the opposite way, so override them here to keep selected = accent.
+    const auto switchStyle =
+      mStyle
+        .WithColor(EVColor::kPR, PluginColors::NAM_THEMECOLOR)
+        .WithColor(EVColor::kFG, PluginColors::NAM_THEMECOLOR.WithOpacity(0.25f))
+        .WithColor(EVColor::kON, PluginColors::NAM_THEMECOLOR)
+        .WithColor(EVColor::kX1, PluginColors::NAM_THEMECOLOR.WithOpacity(0.55f))
+        .WithLabelText(IText(DEFAULT_TEXT_SIZE + 3.f, EVAlign::Middle, PluginColors::NAM_THEMEFONTCOLOR))
+        .WithValueText(IText(DEFAULT_TEXT_SIZE + 1.f, EAlign::Near, PluginColors::NAM_THEMEFONTCOLOR));
     const auto contentArea = mContentContainer->GetRECT().GetPadded(-4.f);
     const float knobStrideX = ((PLUG_WIDTH - 2.0f * (20.0f + 10.0f + 20.0f)) / static_cast<float>(numKnobs));
     const float knobExpandPad = 2.0f;
     const float knobHeight = NAM_KNOB_HEIGHT;
+    const float switchRowHeight = 28.0f;
+    const float switchLabelHeight = 26.0f;
     const float rowGap = 8.0f;
     const float mainAreaPad = 20.0f;
     const float contentPad = 10.0f;
@@ -1315,35 +1412,57 @@ private:
     const int maxColumns =
       std::max(1, std::min(numControls, static_cast<int>(std::floor(contentArea.W() / knobStrideX))));
     const int numColumns = std::min(numControls, maxColumns);
-    const int numRows = (numControls + numColumns - 1) / numColumns;
     const float firstRowTop = GetRECT().T + mainAreaPad + contentPad + titleHeight + knobsExtraSpaceBelowTitle;
     const float startY = std::max(contentArea.T, firstRowTop);
 
-    for (int row = 0; row < numRows; ++row)
+    auto cellHeight = [&](const nam::ParamSpec& spec) -> float {
+      if (_IsSwitchSpec(spec))
+        return switchLabelHeight + static_cast<float>(spec.enum_names.size()) * switchRowHeight;
+      return knobHeight;
+    };
+
+    // Flow rows of up to numColumns controls; advance by the tallest cell in each row so
+    // mixed knob/switch heights never overlap.
+    float rowTop = startY;
+    for (int rowStart = 0; rowStart < numControls; rowStart += numColumns)
     {
-      const int rowStart = row * numColumns;
       const int rowCount = std::min(numColumns, numControls - rowStart);
       const float rowWidth = rowCount * knobStrideX;
       const float rowLeft = contentArea.MW() - 0.5f * rowWidth;
-      const float rowTop = startY + row * (knobHeight + rowGap);
+
+      float rowHeight = 0.0f;
+      for (int col = 0; col < rowCount; ++col)
+        rowHeight = std::max(rowHeight, cellHeight(mSpecs[static_cast<size_t>(rowStart + col)]));
 
       for (int col = 0; col < rowCount; ++col)
       {
         const int i = rowStart + col;
         const float cellLeft = rowLeft + col * knobStrideX;
-        const IRECT cellArea(cellLeft, rowTop, cellLeft + knobStrideX, rowTop + knobHeight);
-        const auto knobArea = cellArea.GetPadded(knobExpandPad);
         const nam::ParamSpec spec = mSpecs[static_cast<size_t>(i)];
+        const IRECT cellArea(cellLeft, rowTop, cellLeft + knobStrideX, rowTop + cellHeight(spec));
 
-        _AddContentChildControl(new ParametricKnobControl(
-          knobArea, spec, mValues[static_cast<size_t>(i)], knobStyle, mKnobBitmap, [this, i](const float newValue) {
-            if (static_cast<size_t>(i) >= mValues.size())
-              return;
-            mValues[static_cast<size_t>(i)] = newValue;
-            if (mOnValuesChanged)
-              mOnValuesChanged(mValues);
-          }));
+        auto onChanged = [this, i](const float newValue) {
+          if (static_cast<size_t>(i) >= mValues.size())
+            return;
+          mValues[static_cast<size_t>(i)] = newValue;
+          if (mOnValuesChanged)
+            mOnValuesChanged(mValues);
+        };
+
+        if (_IsSwitchSpec(spec))
+        {
+          _AddContentChildControl(new ParametricSwitchControl(
+            cellArea.GetPadded(knobExpandPad), spec, mValues[static_cast<size_t>(i)], switchStyle, onChanged));
+        }
+        else
+        {
+          _AddContentChildControl(new ParametricKnobControl(
+            cellArea.GetPadded(knobExpandPad), spec, mValues[static_cast<size_t>(i)], knobStyle, mKnobBitmap,
+            onChanged));
+        }
       }
+
+      rowTop += rowHeight + rowGap;
     }
   }
 
