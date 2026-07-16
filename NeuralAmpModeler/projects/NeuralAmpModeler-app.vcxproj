@@ -417,6 +417,7 @@
     <ClCompile Include="..\..\NeuralAmpModelerCore\NAM\wavenet\model.cpp" />
     <ClCompile Include="..\..\NeuralAmpModelerCore\NAM\wavenet\a2_fast.cpp" />
     <ClCompile Include="..\..\NeuralAmpModelerCore\NAM\wavenet\slimmable.cpp" />
+    <ClCompile Include="..\..\NeuralAmpModelerCore\NAM\wavenet\concat_wavenet.cpp" />
     <ClCompile Include="..\ToneStack.cpp" />
   </ItemGroup>
   <ItemGroup>
